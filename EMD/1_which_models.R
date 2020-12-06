@@ -1,7 +1,10 @@
 require(data.table)
 require(doParallel)
 require(rstudioapi)
-
+require(forecast)
+require(frbs)
+require(Rlibeemd)
+require(tseries)
 ## also loads forecast Rlibeemd and frbs packages within make_forecasts function.
 
 setwd(dirname(getActiveDocumentContext()$path))
