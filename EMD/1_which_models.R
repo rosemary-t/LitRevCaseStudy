@@ -198,6 +198,9 @@ for(zone in 5:10){ # which area we are forecasting for
   all_error_info <- rbind(models_mae, bs_ses)
   fwrite(all_error_info, file=paste0("./whichmodels_errorinfo_zone",zone,".csv"))
   
+  # all_error_info <- fread(file=paste0("./whichmodels_errorinfo_zone",zone,".csv"))
+  # series_names <- colnames(all_error_info)[2:18]
+  
   
   ## now plot errors for the different imf:
   require(ggplot2)
