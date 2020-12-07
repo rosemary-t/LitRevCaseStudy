@@ -81,7 +81,8 @@ for(zone in 5:10){ # which area we are forecasting for
   end_ts <- z_train[(dim(z_train)[1] - horizon), timestamp]
   poss_window_times <- z_train[(timestamp >= start_ts) & (timestamp <= end_ts), timestamp] # the timestamps for the end of all possible sliding windows in the training data.
   issue_times <- sample(poss_window_times, 100, replace=FALSE) # forecast issue times for 100 random windows.
-  save(issue_times, file=paste0("./zone_",zone,"_issuetimes.rda")) # keep a record of which training windows have been used.
+  issue_timesdt <- data.table('timestamps'=issue_times, stage=1)
+  save(issue_timesdt, file=paste0("./zone_",zone,"_issuetimesdt.rda")) # keep a record of which training windows have been used.
   
   ## define a function to return the forecast for every IMF, for every model.
   make_forecasts <- function(IT, zonedata, h, min_nimfs, max_nimfs, WL){
