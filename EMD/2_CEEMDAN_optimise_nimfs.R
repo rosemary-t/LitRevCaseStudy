@@ -2,8 +2,8 @@ require(Rlibeemd)
 require(data.table)
 require(forecast)
 require(rstudioapi)
-
-## also loads forecast and Rlibeemd packages within make_forecasts function.
+require(doParallel)
+require(tseries)
 
 setwd(dirname(getActiveDocumentContext()$path))
 
@@ -11,7 +11,7 @@ setwd(dirname(getActiveDocumentContext()$path))
 ### so we can evaluate error and find the optimal number of IMFs to use.
 ### and then the same for the optimal window length too.
 
-zone <- 3 # which area we are forecasting for
+zone <- 4 # which area we are forecasting for
 horizon <- 1 # number of steps ahead we are forecasting for
 split_date <- as.POSIXct("2012-12-31 12:00") # split the training/testing data here
 eps <- 0.01 # cutoff point at boundaries
@@ -38,18 +38,14 @@ zdata[, T_targetvar := log(T_targetvar/(1-T_targetvar))]
 z_train <- copy(zdata[timestamp<= split_date,])
 
 ## select more random windows, over which to find the optimal number of IMFs
-load(paste0("./zone_",zone, "_issuetimes.rda")) # get the issue times of the random windows already used to find the optimal model
-used_times <- issue_times 
-rm(issue_times)
-
+load(paste0("./zone_",zone, "_issuetimesdt.rda")) # get the issue times of the random windows already used to find the optimal model
 
 start_ts <- z_train[i_wl, timestamp]
 end_ts <- z_train[(dim(z_train)[1] - horizon), timestamp]
 allposs_window_times <- z_train[(timestamp >= start_ts) & (timestamp <= end_ts), timestamp] # all forecast issue times
-poss_window_times <- allposs_window_times[!allposs_window_times %in% used_times] # minus the windows already used
+poss_window_times <- allposs_window_times[!allposs_window_times %in% issue_timesdt$timestamps] # minus the windows already used
 issue_times1 <- sample(poss_window_times, size=200, replace=FALSE) # pick 200 random windows to optimise nimfs over
-issue_times <- c(used_times, issue_times1) # add issue_times1 to the list of used window times.
-save(issue_times, file=paste0("./zone_",zone, "_issuetimes.rda"))
+issue_times1dt <- data.table(timestamps=issue_times1, stage=2) # add issue_times1 to the list of used window times.
 
 
 ## load the table specifying what model for each IMF:
@@ -57,12 +53,12 @@ opt_model <- fread(file=paste0("./whichmodels_errorinfo_zone",zone,".csv"))
 
 
 ## define function to generate forecasts, using the best model, for every IMF.
-series_forecasts <- function(IT, zonedata, h, min_nimfs, max_nimfs, WL, opt_models){
+series_forecasts <- function(IT, zonedata, hor, min_nimfs, max_nimfs, WL, opt_models){
   require(Rlibeemd)
   require(data.table)
   require(forecast)
   
-  best_forecasts <- data.table(issue_time=IT) # data.table to store IMF forecasts
+  best_forecasts <- data.table(issue_time=IT, target_time=IT+hor*60*60) # data.table to store IMF forecasts
   range_nimfs <- c(min_nimfs: (max_nimfs-1))
   
   window_start <- IT - (WL-1)*60*60
@@ -83,7 +79,7 @@ series_forecasts <- function(IT, zonedata, h, min_nimfs, max_nimfs, WL, opt_mode
     }else if(opt_arma=="arma1"){
       # fit arma with d=1.
       fit <- auto.arima(imfs[,imfname], d=1, max.p=6, max.q=4, max.order=8, stepwise = FALSE)
-    }else{cat("wt=",wt,"," ,imfname,  'not selected a model to fit!')}
+    }else{cat("IT=",IT,"," ,imfname,  'not selected a model to fit!')}
     
     best_forecasts[issue_time== IT, paste0(imfname) := as.numeric(forecast(fit, h=horizon)[["mean"]])] # save the forecast
   }
@@ -107,10 +103,11 @@ series_forecasts <- function(IT, zonedata, h, min_nimfs, max_nimfs, WL, opt_mode
   return(best_forecasts)
 }
 
-test <- series_forecasts(issue_times1[2], z_train, horizon, min_nimfs, max_nimfs, i_wl, opt_model)
+# test <- series_forecasts(issue_times1[2], z_train, horizon, min_nimfs, max_nimfs, i_wl, opt_model)
 
 ## now run the forecasts for each window
-cl <- makeCluster(6)
+cores <- detectCores()
+cl <- makeCluster(cores-2)
 registerDoParallel(cl)
 start_time <- Sys.time()
 model_forecasts <- foreach(it = issue_times1) %dopar% {
@@ -119,9 +116,11 @@ model_forecasts <- foreach(it = issue_times1) %dopar% {
 print (Sys.time() - start_time)
 stopCluster(cl)
 
-# save(best_forecasts, file=paste0(path,"\\best_forecasts_zone",zone,".rda"))
-# load(paste0(path,"\\best_forecasts_zone",zone,".rda"))
-# issue_times1 <- best_forecasts$windownum
+best_forecasts <- rbindlist(model_forecasts)
+
+save(best_forecasts, file=paste0("./best_forecasts_zone",zone,".rda"))
+# load(paste0("./best_forecasts_zone",zone,".rda"))
+# issue_times1 <- best_forecasts$issue_time
 
 ## now need to make the 'final' summed forecasts for different numbers of IMFs.
 for (nimfs in c(min_nimfs:max_nimfs)){
@@ -132,97 +131,119 @@ for (nimfs in c(min_nimfs:max_nimfs)){
 
 final_fcs_cols <- paste0("nimfs=", c(min_nimfs:max_nimfs)) # names of the columns in best_forecasts containing the summed forecasts
 best_forecasts[, (final_fcs_cols) := lapply(.SD, function(x){1/(1+exp(-x))}), .SDcols = final_fcs_cols] # convert summed 'total' forecasts back to power space 
-select_cols <- c("issue_time", final_fcs_cols)
+select_cols <- c("issue_time", "target_time", final_fcs_cols)
 IMF_fcs <- best_forecasts[, ..select_cols]
 
 
 # get actual values for error evaluation 
-IMF_fcs[, target_time := issue_time + horizon*60*60]
 IMF_fcs <- merge(IMF_fcs, z_train[,.(TARGETVAR, target_time=timestamp)])
 IMF_errors <- IMF_fcs
 IMF_errors[, (final_fcs_cols) := lapply(.SD, function(x){abs(x-TARGETVAR)}), .SDcols=final_fcs_cols]
-MAEs <- data.table(nimfs =paste0(c(min_nimfs:max_nimfs)), MAE=as.numeric(IMF_errors[,lapply(.SD, mean), .SDcols=final_fcs_cols]))
+IMF_MAEs <- data.table(nimfs =paste0(c(min_nimfs:max_nimfs)), MAE=as.numeric(IMF_errors[,lapply(.SD, mean), .SDcols=final_fcs_cols]))
 
 
 ## Calculate standard error for the error values too via bootstrapping, since it's only a small sample.
-require(tseries)
 for (ni in c(min_nimfs:max_nimfs)){
   bs_error <- tsbootstrap(x=IMF_errors[,get(paste0("nimfs=",ni))], nb=200, mean)
-  MAEs[nimfs==ni, 'S.E.' := bs_error$se]
+  IMF_MAEs[nimfs==ni, 'S.E.' := bs_error$se]
 }
 
 
-plot(MAEs$nimfs, MAEs$MAE, ylim=c(0.05,0.07))
-arrows(x0=as.numeric(MAEs$nimfs), y0=(MAEs$MAE-MAEs$S.E.), y1=(MAEs$MAE+MAEs$S.E.), angle=90, length=0.05, code=3)
+plot(IMF_MAEs$nimfs, IMF_MAEs$MAE)
+arrows(x0=as.numeric(IMF_MAEs$nimfs), y0=(IMF_MAEs$MAE-IMF_MAEs$S.E.), y1=(IMF_MAEs$MAE+IMF_MAEs$S.E.), angle=90, length=0.05, code=3)
 
-best_nimfs <- as.numeric(MAEs[ , .SD[which.min(MAE)]]$nimfs) # the optimal number of IMFs to use.
+best_nimfs <- as.numeric(IMF_MAEs[ , .SD[which.min(MAE)]]$nimfs) # the optimal number of IMFs to use.
 ## if there's no significant difference in the plot, can manually choose the lowest number to keep the model simple.
 # best_nimfs <- 3
-
+opt_params <- fread(file="./opt_parameters.csv")
+opt_params[Zone==zone, Opt_nimf := best_nimfs] # input best_nimfs into opt_parameters csv
 
 ## now find the optimal window length
 ## only select from issue_times where there is enough previous data for the longest rolling window
 start_ts <- z_train[max(try_windowlens), timestamp]
 end_ts <- z_train[(dim(z_train)[1] - horizon), timestamp]
 allposs_window_times <- z_train[(timestamp >= start_ts) & (timestamp <= end_ts), timestamp] # all possible forecast issue times
-poss_window_times <- allposs_window_times[!allposs_window_times %in% c(used_times, issue_times1)] # minus the windows already used
+poss_window_times <- allposs_window_times[!allposs_window_times %in% c(issue_timesdt$timestamps, issue_times1)] # minus the windows already used
 issue_times2 <- sample(poss_window_times, size=200, replace=FALSE)
-wl_forecasts <- data.table(issue_time=issue_times2)
-imfnames <- c(paste("IMF", c(1:(best_nimfs-1))), paste("Residual", best_nimfs))
+issue_times2dt <- data.table(timestamps=issue_times2, stage=3)
+issue_timesdt <- rbind(issue_timesdt, issue_times1dt,issue_times2dt)
+save(issue_timesdt, file=paste0("./zone_",zone, "_issuetimesdt.rda"))
 
-
-i <- 1
-for (wt in issue_times2){#for every sliding window
-  print (i)
-  i <- i+1
-  for (wl in try_windowlens){#for every window length
+## define function to fit models to windows with different lengths
+WL_forecasts <- function(IT, zonedata, hor, opt_nimfs, WLs, opt_models){
+  require(Rlibeemd)
+  require(data.table)
+  require(forecast)
+  
+  wl_forecasts <- data.table(issue_time=IT, target_time=IT+hor*60*60) # data.table to store IMF forecasts
+  imfnames <- c(paste("IMF", c(1:(opt_nimfs-1))), paste("Residual", opt_nimfs))
+  
+  for (WL in WLs){
+    window_start <- IT - (WL-1)*60*60
+    windowdata <- zonedata[(timestamp >= window_start) & (timestamp <= IT),]
     
-    window_start <- wt - (wl-1)*60*60
-    windowdata <- z_train[(timestamp >= window_start) & (timestamp <= wt),] 
-
-    imfs <- ceemdan(windowdata$T_targetvar,num_imfs=best_nimfs) # create the imfs for this rolling window.
-    imflist <- numeric(best_nimfs) # empty list to put each IMF forecast in.
-    colnames(imfs) <- imfnames # so the residual column now matches its name in opt_model.
+    ## first forecast IMFs 1-9 and Residual 10
+    imfs <- ceemdan(windowdata$T_targetvar,num_imfs=opt_nimfs) # create the imfs for this rolling window.
+    colnames(imfs) <- imfnames
     
-    for (i in c(1:best_nimfs)){
-      imfname <- imfnames[i]
-      opt_arma <- opt_model[imf_name == imfname, `best_model (value for d)`]
+    imf_fcs <- numeric(opt_nimfs) # empty vector to put individual IMF forecasts in.
+    
+    for (i in c(1:dim(imfs)[2])){
+      imfname <- colnames(imfs)[i]
+      opt_arma <- opt_model[model == "opt_model", get(imfname)]
       
-      if (opt_arma == 0){
+      if (opt_arma == "arma"){
         # fit arma with d==0 (in reality seems to be faster to not specify d)
         fit <- auto.arima(imfs[,imfname], max.p=6, max.q=4, max.order=8, stepwise = FALSE)
-      }else if(opt_arma==1){
+      }else if(opt_arma=="arma1"){
         # fit arma with d=1.
         fit <- auto.arima(imfs[,imfname], d=1, max.p=6, max.q=4, max.order=8, stepwise = FALSE)
-      }else{cat("wt=",wt,"," ,imfname,  'not selected a model to fit!')}
+      }else{cat("IT=",IT,"," ,imfname,  'not selected a model to fit!')}
       
-      imflist[i] <- as.numeric(forecast(fit, h=horizon)[["mean"]]) # collect the forecast for each IMF.
+      imf_fcs[i] <- as.numeric(forecast(fit, h=horizon)[["mean"]])
     }
     
-    wl_forecasts[issue_time== wt, paste0("wl=",wl) := sum(imflist)] # save the overall forecast
+    wl_forecasts[issue_time==IT, paste0("wl=", WL) := sum(imf_fcs)]
   }
+  return (wl_forecasts)
 }
 
-# save(wl_forecasts, file=paste0(path,"\\wl_forecasts_zone",zone,".rda"))
-# load(file=paste0(path,"\\wl_forecasts_zone",zone,".rda"))
+# test <- WL_forecasts(issue_times2[2], z_train, horizon, best_nimfs, try_windowlens, opt_model)
+
+cl <- makeCluster(cores-2)
+registerDoParallel(cl)
+start_time <- Sys.time()
+wl_forecasts <- foreach(it = issue_times2) %dopar% {
+  WL_forecasts(it, z_train, horizon, best_nimfs, try_windowlens, opt_model)
+}
+print (Sys.time() - start_time)
+stopCluster(cl)
+
+wl_forecasts <- rbindlist(wl_forecasts)
+
+save(wl_forecasts, file=paste0("./wl_forecasts_zone",zone,".rda"))
+# load(file=paste0("./wl_forecasts_zone",zone,".rda"))
+# issue_times2 <- wl_forecasts$issue_time
 
 
 # get actual values for error evaluation 
 wl_fc_cols <- paste0("wl=", try_windowlens)
-wl_forecasts[, target_time := issue_time + horizon*60*60]
 wl_forecasts[, (wl_fc_cols) := lapply(.SD, function(x){1/(1+exp(-x))}), .SDcols = wl_fc_cols] # convert forecasts back to power space 
 wl_forecasts <- merge(wl_forecasts, z_train[,.(TARGETVAR, target_time=timestamp)]) # merge on target_time
 wl_errors <- wl_forecasts
 
 wl_errors[, (wl_fc_cols) := lapply(.SD, function(x){abs(x-TARGETVAR)}), .SDcols=wl_fc_cols]
 wl_MAEs <- data.table(windowlen =paste0(try_windowlens), MAE=as.numeric(wl_errors[,lapply(.SD, mean), .SDcols=wl_fc_cols]))
-require(tseries)
+
+## bootstrap errors
 for (wl in try_windowlens){
   bs_error <- tsbootstrap(x=wl_errors[,get(paste0("wl=",wl))], nb=200, mean)
   wl_MAEs[windowlen==wl, 'S.E.' := bs_error$se]
 }
 
-plot(wl_MAEs$windowlen, wl_MAEs$MAE, ylim=c(0.08, 0.13))
+plot(wl_MAEs$windowlen, wl_MAEs$MAE)
 arrows(x0=as.numeric(wl_MAEs$windowlen), y0=(wl_MAEs$MAE-wl_MAEs$S.E.), y1=(wl_MAEs$MAE+wl_MAEs$S.E.), angle=90, length=0.05, code=3)
 
 best_wl <- as.numeric(wl_MAEs[ , .SD[which.min(MAE)]]$windowlen) # the optimal window length.
+opt_params[Zone==zone, Opt_wl := best_wl]
+fwrite(opt_params, file="./opt_parameters.csv")
