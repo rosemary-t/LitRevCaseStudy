@@ -2,30 +2,32 @@ require(data.table)
 require(expm)
 require(stats)
 require(ProbCast)
+require(doParallel)
+require(rstudioapi)
+
+setwd(dirname(getActiveDocumentContext()$path))
 
 ## define all the model parameters
-#nlevels <- seq(60,90,10)   # possible number of power levels to test
-nlevels <- 70
-cs <- seq(500, 1000, 100)
+nlevels <- seq(80,120,10)   # possible number of power levels to test
+cs <- seq(400, 1200, 200)   # weighting given to data (over prior)
 split_date <- as.POSIXct("2012-12-31 12:00") # every target time up to and including split_date is the training data.
 horizons <- c(1:6) # forecast 1 to 6 hours ahead (1:6 steps ahead since it's hourly resolution data)
-training_len_options <- 7000
-#training_len_options <- seq(5500,7000,500) # the set of window lengths to test over
+training_len_options <- seq(5000,7000,500) # the set of window lengths to test over
 max_wl = max(training_len_options) + max(horizons)  # the maximum window length we will test over.
-quantiles <- seq(0.05, 0.95, 0.05)
-qnames <- paste0("q",quantiles*100)
+Quantiles <- seq(0.05, 0.95, 0.05)
+Qnames <- paste0("q",Quantiles*100)
 
 
 ## load the data
-zone <- 1
-load(paste0("C:\\Users\\rosemaryt\\ShareFile\\Personal Folders\\Data\\GEFcom2014data\\data_zone", zone, ".rda"))
+zone <- 10
+load(paste0("../Data/data_zone", zone, ".rda"))
 assign("zdata", get(paste0("data_zone", zone)))
 rm(list=paste0("data_zone", zone))
 zdata <- zdata[,.(TARGETVAR, timestamp)] # just keep the power (not using the NWP forecasts)
 
 
 ## define functions:
-## one to do the prediction
+## one to do the prediction (return a probability for each power level)
 prediction <- function(timeseries, nlevels, horizon, inputstate, c){
   ## timeseries must be a data.table with a single column named 'ts'.
   ## c is the strength of the counts information relative to the prior - i.e. c=2 means counts gets twice as much weight as prior.
@@ -63,12 +65,17 @@ prediction <- function(timeseries, nlevels, horizon, inputstate, c){
   }
 }
 
-## and one to return the pinball for a given set of parameters
-## the parameters are stored in a vector c(nlevels, window_len, C)
-avg_pinball <- function(params, powerdata, windowtimes){
-  nl <- params[1] # nlevels
-  wlen <- params[2] # window length
-  C <- params[3] # relative weight for counts data.
+## and one to return the pinball for a given set of parameters, from the i th row of MCsettings
+avg_pinball <- function(MCsettings, i, powerdata, windowtimes, quantiles){
+  require(data.table)
+  require(expm)
+  require(stats)
+  require(ProbCast)
+  
+  qnames <- paste0("q",quantiles*100)
+  nl <- MCsettings[i, Nlevels] # nlevels
+  wlen <- MCsettings[i, windowlen] # window length
+  C <- MCsettings[i, Cval] # relative weight for counts data.
   
   h <- 1 # just evaluate for a one step ahead horizon.
   levels <- seq(from=0, to=1, length.out=nl) # between 0 and 1 because TARGETVAR is already normalised
@@ -145,37 +152,31 @@ window_times <- train_data[(timestamp >= first_window) & (timestamp <= last_wind
 
 
 ## optimise (nlevels, c, window_len) simultaneously
-h <- 1 # for now.. we need to do this whole process for all horizons eventually.... or just use optimal settings from h=1 for all other horizons too
+h <- horizons[1] # optimise parameters for one step ahead forecast.
 
+#test <- avg_pinball(MC_settings_results, 2, train_data, window_times, Quantiles)
 
 ## data.table to store pinball loss for each (nlevels, k) combination
 MC_settings_results <- CJ(Cval=cs, Nlevels=nlevels, windowlen=training_len_options)
 
-
-for (nl in nlevels){
-  ### discretise data
-  print (nl)
-
-  for (C in cs){
-    for (WL in training_len_options){
-      pbloss <- avg_pinball(c(nl, WL, C), train_data, window_times)
-      MC_settings_results[(Cval==C)&(Nlevels==nl)&(windowlen==WL), Pinball := pbloss]
-    }
-  }
+## test each parameter combination in parallel
+cores <- detectCores()
+cl <- makeCluster(cores-2)
+registerDoParallel(cl)
+start_time <- Sys.time()
+pbscores <- foreach(i = c(1:dim(MC_settings_results)[1])) %dopar% {
+  avg_pinball(MC_settings_results, i, train_data, window_times, Quantiles)
 }
+print (Sys.time() - start_time)
+stopCluster(cl)
 
+pbscores <- unlist(pbscores)
+MC_settings_results[, Pinball := pbscores]
 
+save(MC_settings_results, file=paste0("./MCsettings_zone",zone,".rda"))
 
-#save(MC_settings_results, file=paste0("C:\\Users\\rosemaryt\\ShareFile\\Personal Folders\\reproducing short term forecasting papers\\Markov Chain\\MCsettings_zone",zone,"param_range_2.rda"))
-#MC_settings_results_1 <- copy(MC_settings_results)
-#zone <- 1
-load(file=paste0("C:\\Users\\rosemaryt\\ShareFile\\Personal Folders\\reproducing short term forecasting papers\\Markov Chain\\MCsettings_zone",zone,"param_range_2.rda"))
-MC_settings_results <- rbind(MC_settings_results, MC_settings_results_1)
+opt_params <- MC_settings_results[ , .SD[which.min(Pinball)]]
 
-## param_range_1 is nlevels <- seq(20,50,10) ; cs <- seq(80, 160, 10) ; training_len_options <- seq(1000,5000,500)
-## param_range_2 is nlevels <- seq(60,90,10) ; cs <- seq(170, 250, 10) ; training_len_options <- seq(5500,9500,500)
-# opt_params <- MC_settings_results[ , .SD[which.min(Pinball)]]
-# 
-plot(MC_settings_results[(Nlevels==70) & (windowlen==7000), Cval], MC_settings_results[(Nlevels==70) & (windowlen==7000),Pinball])
-# plot(MC_settings_results[(Cval==250) & (windowlen==7000), Nlevels], MC_settings_results[(Cval==250) & (windowlen==7000),Pinball])
-# plot(MC_settings_results[(Cval==250) & (Nlevels==70), windowlen], MC_settings_results[(Cval==250) & (Nlevels==70),Pinball])
+plot(MC_settings_results[(Nlevels==opt_params$Nlevels) & (windowlen==opt_params$windowlen), Cval], MC_settings_results[(Nlevels==opt_params$Nlevels) & (windowlen==opt_params$windowlen),Pinball], main="Cval")
+plot(MC_settings_results[(Cval==opt_params$Cval) & (windowlen==opt_params$windowlen), Nlevels], MC_settings_results[(Cval==opt_params$Cval) & (windowlen==opt_params$windowlen),Pinball], main="Nlevels")
+plot(MC_settings_results[(Cval==opt_params$Cval) & (Nlevels==opt_params$Nlevels), windowlen], MC_settings_results[(Cval==opt_params$Cval) & (Nlevels==opt_params$Nlevels),Pinball], main="windowlen")
