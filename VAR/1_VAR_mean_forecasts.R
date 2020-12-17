@@ -125,8 +125,6 @@ for (h in horizons){
     
   }
   
-  
-  
   ## now fit model on all training data and use to forecast for the test set
   Xtrain <- as.matrix(bigX[target_time <= split_date, .SD, .SDcols = !c('issue_time', 'target_time', varcols)])
   Ytrain <- as.matrix(bigX[target_time <= split_date, ..varcols])
