@@ -103,7 +103,7 @@ horizon_fcs <- function(all_xydt, all_x, hor, bestmodel){
 
 ##############################################################################################
 
-z <- 3 # which area we are forecasting for
+z <- 10 # which area we are forecasting for
 horizons <- c(1:6) # number of steps ahead we are forecasting for
 split_date <- as.POSIXct("2012-12-31 12:00") # split the training/testing data here
 eps <- 0.01 # cutoff point at boundaries for lognormal transformation
@@ -149,12 +149,10 @@ end_ts <- train_chunk_three[(dim(train_chunk_three)[1] - max(horizons)), timesta
 issue_times <- seq(from=start_ts, to=end_ts, by=windowlen*60*60)
 
 all_imf_xys <- data.table()
-start_time <- Sys.time()
 for (it in issue_times){
   it_dt <- make_xydfs(it, train_chunk_three, windowlen, opt_nimfs, Nlags, horizons)
   all_imf_xys <- rbind(all_imf_xys, it_dt)
 }
-print (Sys.time() - start_time)
 
 
 end_test_ts <- zdata[(dim(zdata)[1] - max(horizons)), timestamp]
@@ -175,14 +173,10 @@ all_X_rows <- rbindlist(X_fc_rows)
 
 all_mean_fcs <- data.table()
 for (h in horizons){
-  hfcs <- horizon_fcs(all_imf_xys, all_X_rows, horizons[1], best_model)
+  hfcs <- horizon_fcs(all_imf_xys, all_X_rows, h, best_model)
   all_mean_fcs <- rbind(all_mean_fcs, hfcs)
 }
 
 all_mean_fcs[, Horizon := (target_time - issue_time)]
 
-training_mean_fcs <- all_mean_fcs[issue_time <= split_date]
-testing_mean_fcs <- all_mean_fcs[issue_time > split_date]
-
-save(training_mean_fcs, file=paste0("./mean_forecasts_trainset_z", z,".rda"))
-save(testing_mean_fcs, file=paste0("./mean_forecasts_testset_z",z,".rda"))
+save(all_mean_fcs, file=paste0("./mean_forecasts_zone", z,".rda"))
