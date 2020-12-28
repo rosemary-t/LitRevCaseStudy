@@ -64,7 +64,7 @@ for (h in horizons){
   p_pinball <- pinball(persistence_fcs[[1]][persistence_indices], realisations = persistence_fcs[[2]][persistence_indices, ActualPower])
   v_pinball <- pinball(VAR_fcs[[1]][VAR_indices], realisations = VAR_fcs[[2]][VAR_indices, ActualPower])
   mc_pinball <- pinball(MC_fcs[[1]][MC_indices], realisations = MC_fcs[[2]][MC_indices, ActualPower])
-  # pinball_ss <- 1-v_pinball$Loss/p_pinball$Loss # if you uwant pinball skill score per quantile.
+  # pinball_ss <- 1-v_pinball$Loss/p_pinball$Loss # if you want pinball skill score per quantile.
   # plot(v_pinball$Quantile, pinball_ss)
   
   model_ss[(Model=="VAR") & (Horizon==h), Pinball_ss := 1 - mean(v_pinball$Loss)/mean(p_pinball$Loss)]
