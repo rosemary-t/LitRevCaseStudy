@@ -2,21 +2,21 @@ require(Rlibeemd)
 require(data.table)
 require(forecast)
 require(doParallel)
+require(rstudioapi)
 
-path <- "C:\\Users\\rosemaryt\\ShareFile\\Personal Folders\\reproducing short term forecasting papers\\EMD"
-setwd(path)
+setwd(dirname(getActiveDocumentContext()$path))
 
-z <- 1 # which area we are forecasting for
+z <- 2 # which area we are forecasting for
 horizons <- c(1:6) # number of steps ahead we are forecasting for
 split_date <- as.POSIXct("2012-12-31 12:00") # split the training/testing data here
 eps <- 0.01 # cutoff point at boundaries
 
-opt_params <- fread(file=paste0(path, "\\opt_parameters.csv"))
-opt_nimfs <- opt_params[zone==z, opt_nimfs]
-opt_windowlen <- opt_params[zone==z, opt_wl]
+opt_params <- fread(file="./opt_parameters.csv")
+opt_nimfs <- opt_params[Zone==z, Opt_nimf]
+opt_windowlen <- opt_params[Zone==z, Opt_wl]
 
 # now load the data and prepare it
-load(paste0("C:\\Users\\rosemaryt\\ShareFile\\Personal Folders\\Data\\GEFcom2014data\\data_zone", z, ".rda"))
+load(paste0("../Data/data_zone", z, ".rda"))
 assign('zdata', get(paste0('data_zone', z)))
 rm(list=paste0("data_zone",z))
 
@@ -28,12 +28,12 @@ zdata[, T_targetvar := lapply(.SD, function(x){ifelse(x <= eps,  eps, ifelse(x >
 zdata[, T_targetvar := log(T_targetvar/(1-T_targetvar))]
 
 ## also load the table specifying what model for each IMF:
-opt_model <- fread(file=paste0(path, "\\model_types_errors_toplot_zone", z, ".csv"))
+opt_model <- fread(file=paste0("./whichmodels_errorinfo_zone",z,".csv"))
 imfnames <- c(paste("IMF", c(1:(opt_nimfs-1))), paste("Residual", opt_nimfs))
 
 ## need to produce mean forecasts now using opt_nimfs and opt_windowlen, for ALL possible time points 
 ## then the ones in the training set can be used to find the variance of the residuals
-## and the test set is used to evaluate the forecasts out of sample.
+## and the test set is used to evaluate the final probabilistic forecasts out of sample.
 start_ts <- zdata[opt_windowlen, timestamp] # first possible issue time 
 end_ts <- zdata[(dim(zdata)[1] - max(horizons)), timestamp]
 allposs_window_times <- zdata[(timestamp >= start_ts) & (timestamp <= end_ts), timestamp] # all forecast issue times
@@ -75,20 +75,17 @@ produce_forecasts <- function(ts_datatable, WT, WL, nimfs, H, opt_model){
   return (horizon_forecasts)
 }
 
+# test <- produce_forecasts(zdata, allposs_window_times[1], opt_windowlen, opt_nimfs, max(horizons), opt_model)
+
 ## first do for 500 windows in the training set, to get standard deviation of residuals from
 ## find the window times used already....
-load(paste0("./test_arma_fcs_zone_",z, ".rda"))
-load(paste0("./best_forecasts_zone",z, ".rda"))
-load(paste0("./wl_forecasts_zone",z,".rda"))
-used_times <- c(arma_forecasts$issue_time, best_forecasts$issue_time, wl_forecasts$issue_time)
-poss_train_times <- allposs_window_times[(!allposs_window_times %in% used_times) & (allposs_window_times <= split_date)] 
-rm(arma_forecasts, best_forecasts, wl_forecasts)
+load(paste0("./zone_", z, "_issuetimesdt.rda"))
+poss_train_times <- allposs_window_times[(!allposs_window_times %in% issue_timesdt$timestamps) & (allposs_window_times <= split_date)] 
 training_times <- sample(poss_train_times, size=500, replace=FALSE)
 
-
-cl <- makeCluster(6)
+cores <- detectCores()
+cl <- makeCluster(cores-2)
 registerDoParallel(cl)
-
 start_time <- Sys.time()
 train_horizon_forecasts <- foreach(wt =  training_times) %dopar% {
   produce_forecasts(zdata, wt, opt_windowlen, opt_nimfs, max(horizons), opt_model)
@@ -97,22 +94,22 @@ print (Sys.time() - start_time)
 stopCluster(cl)
 
 Train_forecasts <- rbindlist(train_horizon_forecasts)
-save(Train_forecasts, file=paste0(path,"\\train_mean_forecasts_zone",z,".rda"))
+save(Train_forecasts, file=paste0("./train_mean_forecasts_zone",z,".rda"))
 
+## now get mean forecasts for all windows in the test set
 test_times <- allposs_window_times[allposs_window_times > split_date]
+second_test_times <- test_times[!test_times %in% unique(Test_forecasts$issue_time)]
 
-## do the first half of test_times....... 
-first_test_times <- test_times[c(1:5000)]
-
-cl <- makeCluster(6)
+cl <- makeCluster(cores-2)
 registerDoParallel(cl)
-
 start_time <- Sys.time()
-test_horizon_forecasts <- foreach(wt =  first_test_times) %dopar% {
+test_horizon_forecasts <- foreach(wt =  second_test_times) %dopar% {
   produce_forecasts(zdata, wt, opt_windowlen, opt_nimfs, max(horizons), opt_model)
 }
 print (Sys.time() - start_time)
 stopCluster(cl)
 
-Test_forecasts <- rbindlist(test_horizon_forecasts)
-save(Test_forecasts, file=paste0(path,"\\test_mean_forecasts_zone",z,".rda"))
+Test1_forecasts <- rbindlist(test_horizon_forecasts)
+save(Test_forecasts, file=paste0("./test_mean_forecasts_zone",z,".rda"))
+load(paste0("./test_mean_forecasts_zone",z,".rda"))
+#Test_forecasts <- rbind(Test_forecasts, Test1_forecasts)
