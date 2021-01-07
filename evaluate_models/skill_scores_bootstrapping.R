@@ -5,7 +5,8 @@ require(rstudioapi)
 setwd(dirname(getActiveDocumentContext()$path))
 
 zones <- c(1:10)
-model <- "VAR"
+model <- "EMD"
+Nboots <- 1000 # number of times to bootstrap resample
 
 
 ## load persistence model forecasts
@@ -13,105 +14,145 @@ persistence_quantiles_list <- vector(mode = "list", length = length(zones))
 persistence_details_list <- vector(mode = "list", length = length(zones))
 for (i in zones){
   load(file=paste0("../persistence/zone", i, "_forecasts.rda"))
+  persistence_fcs[[2]][, id := c(1:dim(persistence_fcs[[2]])[1])] # add an row index count
   persistence_quantiles_list[[i]] <- persistence_fcs[[1]]
   persistence_details_list[[i]] <- persistence_fcs[[2]]
+  
+  if (i == 1){
+    ## initialise a record of the (issue_time, target_time) pairs that exist for ALL zones
+    persistence_times_mutual <- persistence_fcs[[2]][,.(issue_time, target_time, Horizon)]
+  }else{
+    zone_rows <- persistence_fcs[[2]][,.(issue_time, target_time, Horizon)]
+    persistence_times_mutual <- merge(persistence_times_mutual, zone_rows) # keep the rows from mutual_rows, that also appear in zone_rows
+  }
+  # print (dim(persistence_times_mutual))
 }
 horizons <- unique(persistence_details_list[[1]]$Horizon)
+
 
 ## load model forecasts
 model_quantiles_list <- vector(mode = "list", length = length(zones))
 model_details_list <- vector(mode = "list", length = length(zones))
 if (model=="VAR"){
-  for (zone in zones){
-    load(file=paste0("../VAR/zone",zone,"_qs_constvar.rda"))
+  for (i in zones){
+    load(file=paste0("../VAR/final_quantiles_zone",i,".rda"))
+    VAR_fcs[[2]][, id := c(1:dim(VAR_fcs[[2]])[1])] # add an row index count
     model_quantiles_list[[i]] <- VAR_fcs[[1]]
     model_details_list[[i]] <- VAR_fcs[[2]]
+    
+    if (i == 1){
+      ## initialise a record of the (issue_time, target_time) pairs that exist for ALL zones
+      model_times_mutual <- VAR_fcs[[2]][,.(issue_time, target_time, Horizon)]
+    }else{
+      zone_rows <- VAR_fcs[[2]][,.(issue_time, target_time, Horizon)]
+      model_times_mutual <- merge(model_times_mutual, zone_rows) # keep the rows from mutual_rows, that also appear in zone_rows
+    }
   }
+  rm(VAR_fcs)
 }else if(model=="EMD"){
-  for (zone in zones){
-    load(file=paste0("../EMD/zone",zone,"_qs_constvar.rda"))
+  for (i in zones){
+    load(file=paste0("../EMD_v2/final_quantiles_zone",i,".rda"))
+    EMD_fcs[[2]][, id := c(1:dim(EMD_fcs[[2]])[1])] # add an row index count
     model_quantiles_list[[i]] <- EMD_fcs[[1]]
     model_details_list[[i]] <- EMD_fcs[[2]]
+    
+    if (i == 1){
+      ## initialise a record of the (issue_time, target_time) pairs that exist for ALL zones
+      model_times_mutual <- EMD_fcs[[2]][,.(issue_time, target_time, Horizon)]
+    }else{
+      zone_rows <- EMD_fcs[[2]][,.(issue_time, target_time, Horizon)]
+      model_times_mutual <- merge(model_times_mutual, zone_rows) # keep the rows from mutual_rows, that also appear in zone_rows
+    }
   }
+  rm(EMD_fcs)
 }else if(model=="MC"){
-  for (zone in zones){
-    load(file=paste0("../MC/zone",zone,"_qs_constvar.rda"))
-    model_quantiles_list[[i]] <- EMD_fcs[[1]]
-    model_details_list[[i]] <- EMD_fcs[[2]]
+  for (i in zones){
+    load(file=paste0("../MC/test_forecasts_zone",i,".rda"))
+    MC_fcs[[2]][, id := c(1:dim(MC_fcs[[2]])[1])] # add an row index count
+    model_quantiles_list[[i]] <- MC_fcs[[1]]
+    model_details_list[[i]] <- MC_fcs[[2]]
+    
+    if (i == 1){
+      ## initialise a record of the (issue_time, target_time) pairs that exist for ALL zones
+      model_times_mutual <- MC_fcs[[2]][,.(issue_time, target_time, Horizon)]
+    }else{
+      zone_rows <- MC_fcs[[2]][,.(issue_time, target_time, Horizon)]
+      model_times_mutual <- merge(model_times_mutual, zone_rows) # keep the rows from mutual_rows, that also appear in zone_rows
+    }
   }
-}
+  rm(MC_fcs)
+}else{print("no model forecasts loaded")}
 
+# now get the (issue_time, target_time) pairs we have both persistence and model forecasts for, for all zones
+mutual_times <- merge(persistence_times_mutual, model_times_mutual)
 
-## load Markov Chain forecasts 
-#load(file=paste0("../MC/test_forecasts_zone",zone,".rda"))
-
-## check that none of the forecasts are NA
-# na_persistence <- which(!complete.cases(persistence_fcs[[1]]))
-# na_var <- which(!complete.cases((VAR_fcs[[1]])))
-# na_mc <- which(!complete.cases((MC_fcs[[1]])))
-
-# get the skill scores
-model_ss <- CJ(Horizon = horizons, Model=c("VAR", "MC", "EMD"))
-persistence_rel <- data.table()
-var_rel <- data.table()
-mc_rel <- data.table()
-emd_rel <- data.table()
-
-
+model_skillscores <- CJ(Horizon=horizons, type=c("mean", "min", "max"))
+## we are ready to bootstrap.
 for (h in horizons){
-  persistence_times <- persistence_fcs[[2]][Horizon==h,issue_time]# issue_times that there is a persistence forecast for
-  VAR_times <- VAR_fcs[[2]][Horizon==h, issue_time]
-  MC_times <- MC_fcs[[2]][Horizon==h, issue_time]
-  ## now can get the issue_times that have both persistence and VAR forecasts:
-  common_times <- as.POSIXct(Reduce(intersect, list(persistence_times, VAR_times, MC_times)), tz="UTC", origin="1970-01-01 00:00.00 UTC")
-  persistence_indices <- persistence_fcs[[2]][(Horizon==h) & (issue_time %in% common_times), which=TRUE]
-  VAR_indices <- VAR_fcs[[2]][(Horizon==h) & (issue_time %in% common_times), which=TRUE]
-  MC_indices <- MC_fcs[[2]][(Horizon==h) & (issue_time %in% common_times), which=TRUE]
+  print (h)
+  horizon_times <- mutual_times[Horizon==h, target_time]
+  h_mae_ss <- matrix(nrow=Nboots, ncol=length(zones))
+  h_rmse_ss <- matrix(nrow=Nboots, ncol=length(zones))
+  h_pb_ss <- matrix(nrow=Nboots, ncol=length(zones))
   
-  ## first, MAE and RMSE with q50
-  p_errors <- persistence_fcs[[1]][persistence_indices, q50] - persistence_fcs[[2]][persistence_indices, ActualPower]
-  p_MAE <- mean(abs(p_errors))
-  p_RMSE <- sqrt(mean(p_errors^2))
+  for (nb in c(1:Nboots)){
+    sample_times <- sample(horizon_times, length(horizon_times), replace=TRUE)
+    
+    ## now calculate skill score for each zone and save in relevant matrices
+    for (z in zones){
+      persistence_h_details <- persistence_details_list[[z]][Horizon==h]
+      model_h_details <- model_details_list[[z]][Horizon==h]
+      
+      persistence_short_indices <- match(sample_times, persistence_h_details[, target_time])
+      persistence_indices <- persistence_h_details[persistence_short_indices, id]
+      
+      model_short_indices <- match(sample_times, model_h_details[, target_time])
+      model_indices <- model_h_details[model_short_indices, id]
+      
+      ## calculate MAE and RMSE with q50
+      ## for persistence
+      p_errors <- persistence_quantiles_list[[z]][persistence_indices, q50] - persistence_details_list[[z]][persistence_indices, ActualPower]
+      p_MAE <- mean(abs(p_errors))
+      p_RMSE <- sqrt(mean(p_errors^2))
+      
+      ## and the model
+      model_errors <- model_quantiles_list[[z]][model_indices, q50] - model_details_list[[z]][model_indices, ActualPower]
+      model_MAE <- mean(abs(model_errors), na.rm=TRUE)
+      model_RMSE <- sqrt(mean(model_errors^2, na.rm=TRUE))
+      
+      ## enter skill score into matrices
+      h_mae_ss[nb,z] <- 1-model_MAE/p_MAE
+      h_rmse_ss[nb,z] <- 1-model_RMSE/p_RMSE
+      
+      ## and then pinball score too.
+      p_pinball <- pinball(persistence_quantiles_list[[z]][persistence_indices], realisations = persistence_details_list[[z]][persistence_indices, ActualPower], plot.it=FALSE)
+      model_pinball <- pinball(model_quantiles_list[[z]][model_indices], realisations = model_details_list[[z]][model_indices, ActualPower], plot.it=FALSE)
+      h_pb_ss[nb,z] <- 1 - mean(model_pinball$Loss)/mean(p_pinball$Loss)
+    }
+  }
   
-  v_errors <- VAR_fcs[[1]][VAR_indices, q50] - VAR_fcs[[2]][VAR_indices, ActualPower]
-  v_MAE <- mean(abs(v_errors))
-  v_RMSE <- sqrt(mean(v_errors^2))
-  model_ss[(Model=="VAR")&(Horizon==h), MAE_ss := (1-v_MAE/p_MAE)]
-  model_ss[(Model=="VAR")&(Horizon==h), RMSE_ss := (1-v_RMSE/p_RMSE)]
+  ## now fill in entries in skill_scores data.table
+  model_skillscores[(Horizon==h)&(type=="mean"), MAE_ss := mean(h_mae_ss)]
+  model_skillscores[(Horizon==h)&(type=="min"), MAE_ss := min(h_mae_ss)]
+  model_skillscores[(Horizon==h)&(type=="max"), MAE_ss := max(h_mae_ss)]
   
-  mc_errors <- MC_fcs[[1]][MC_indices, q50] - MC_fcs[[2]][MC_indices, ActualPower]
-  mc_MAE <- mean(abs(mc_errors))
-  mc_RMSE <- sqrt(mean(mc_errors^2))
-  model_ss[(Model=="MC")&(Horizon==h), MAE_ss := (1-mc_MAE/p_MAE)]
-  model_ss[(Model=="MC")&(Horizon==h), RMSE_ss := (1-mc_RMSE/p_RMSE)]
+  model_skillscores[(Horizon==h)&(type=="mean"), RMSE_ss := mean(h_rmse_ss)]
+  model_skillscores[(Horizon==h)&(type=="min"), RMSE_ss := min(h_rmse_ss)]
+  model_skillscores[(Horizon==h)&(type=="max"), RMSE_ss := max(h_rmse_ss)]
   
-  
-  
-  ## and also pinball skill score.
-  p_pinball <- pinball(persistence_fcs[[1]][persistence_indices], realisations = persistence_fcs[[2]][persistence_indices, ActualPower])
-  v_pinball <- pinball(VAR_fcs[[1]][VAR_indices], realisations = VAR_fcs[[2]][VAR_indices, ActualPower])
-  mc_pinball <- pinball(MC_fcs[[1]][MC_indices], realisations = MC_fcs[[2]][MC_indices, ActualPower])
-  # pinball_ss <- 1-v_pinball$Loss/p_pinball$Loss # if you want pinball skill score per quantile.
-  # plot(v_pinball$Quantile, pinball_ss)
-  
-  model_ss[(Model=="VAR") & (Horizon==h), Pinball_ss := 1 - mean(v_pinball$Loss)/mean(p_pinball$Loss)]
-  model_ss[(Model=="MC") & (Horizon==h), Pinball_ss := 1 - mean(mc_pinball$Loss)/mean(p_pinball$Loss)]
-  
-  
-  p_h_rel <- reliability(persistence_fcs[[1]][persistence_indices], realisations = persistence_fcs[[2]][persistence_indices, ActualPower])
-  p_h_rel$Horizon <- h
-  persistence_rel <- rbind(persistence_rel, p_h_rel)
-  
-  var_h_rel <- reliability(VAR_fcs[[1]][VAR_indices], realisations = VAR_fcs[[2]][VAR_indices, ActualPower])
-  var_h_rel$Horizon <- h
-  var_rel <- rbind(var_rel, var_h_rel)
-  
-  mc_h_rel <- reliability(MC_fcs[[1]][MC_indices], realisations = MC_fcs[[2]][MC_indices, ActualPower])
-  mc_h_rel$Horizon <- h
-  mc_rel <- rbind(mc_rel, mc_h_rel)
-  
+  model_skillscores[(Horizon==h)&(type=="mean"), pb_ss := mean(h_pb_ss)]
+  model_skillscores[(Horizon==h)&(type=="min"), pb_ss := min(h_pb_ss)]
+  model_skillscores[(Horizon==h)&(type=="max"), pb_ss := max(h_pb_ss)]
 }
 
+model_skillscores[, Model := paste0(model)]  
+fwrite(model_skillscores, file=paste0("./",model,"_skillscores_horizons.csv"))
+# model_skillscores <- fread(file=paste0("./",model,"_skillscores_horizons.csv"))
 
-ggplot(data=model_ss, aes(x=Horizon, y=Pinball_ss, colour=Model)) +
+require(ggplot2)
+ggplot(data=model_skillscores[type=='mean'], aes(x=Horizon, y=pb_ss)) +
   geom_line()
+
+# ggplot(data=model_scores, aes(x=Horizon, y=avPinball, colour=Model)) +
+#   geom_line() +
+#   geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)
