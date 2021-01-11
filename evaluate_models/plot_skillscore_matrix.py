@@ -18,7 +18,7 @@ axlabs = matrixdata.columns.values
 plotdata = np.array(matrixdata)
 
 fig, ax = plt.subplots()
-im = ax.imshow(plotdata, cmap='plasma')
+im = ax.imshow(plotdata, cmap='RdYlGn')
 ax.set_xticks(np.arange(len(axlabs)))
 ax.set_yticks(np.arange(len(axlabs)))
 ax.set_xticklabels(axlabs)
@@ -27,11 +27,6 @@ ax.set_yticklabels(axlabs)
 
 for i in range(len(axlabs)):
     for j in range(len(axlabs)):
-        if plotdata[i,j] > 0.15:
-            textcol = 'k'
-        else: 
-            textcol='w'
         text = ax.text(j, i, round(plotdata[i, j],2),
-                       ha="center", va="center", color=textcol)
-plt.title("Pinball")
+                       ha="center", va="center", color='k')
 plt.show()

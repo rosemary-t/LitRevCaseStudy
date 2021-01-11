@@ -7,6 +7,7 @@ setwd(dirname(getActiveDocumentContext()$path))
 zones <- c(1:10)
 model <- "EMD"
 Nboots <- 1000 # number of times to bootstrap resample
+bounds <- c(0.025,0.975) # quantiles of bootstraped metric to plot. If (0,1) will use min and max observed pinball scores.
 
 
 ## load persistence model forecasts
@@ -86,7 +87,7 @@ if (model=="VAR"){
 # now get the (issue_time, target_time) pairs we have both persistence and model forecasts for, for all zones
 mutual_times <- merge(persistence_times_mutual, model_times_mutual)
 
-model_skillscores <- CJ(Horizon=horizons, type=c("mean", "min", "max"))
+model_skillscores <- CJ(Horizon=horizons, type=c("mean", "lower", "upper"))
 ## we are ready to bootstrap.
 for (h in horizons){
   print (h)
@@ -133,16 +134,28 @@ for (h in horizons){
   
   ## now fill in entries in skill_scores data.table
   model_skillscores[(Horizon==h)&(type=="mean"), MAE_ss := mean(h_mae_ss)]
-  model_skillscores[(Horizon==h)&(type=="min"), MAE_ss := min(h_mae_ss)]
-  model_skillscores[(Horizon==h)&(type=="max"), MAE_ss := max(h_mae_ss)]
-  
   model_skillscores[(Horizon==h)&(type=="mean"), RMSE_ss := mean(h_rmse_ss)]
-  model_skillscores[(Horizon==h)&(type=="min"), RMSE_ss := min(h_rmse_ss)]
-  model_skillscores[(Horizon==h)&(type=="max"), RMSE_ss := max(h_rmse_ss)]
-  
   model_skillscores[(Horizon==h)&(type=="mean"), pb_ss := mean(h_pb_ss)]
-  model_skillscores[(Horizon==h)&(type=="min"), pb_ss := min(h_pb_ss)]
-  model_skillscores[(Horizon==h)&(type=="max"), pb_ss := max(h_pb_ss)]
+  
+  if (bounds[1] == 0){
+    model_skillscores[(Horizon==h)&(type=="lower"), MAE_ss := min(h_mae_ss)]
+    model_skillscores[(Horizon==h)&(type=="lower"), RMSE_ss := min(h_rmse_ss)]
+    model_skillscores[(Horizon==h)&(type=="lower"), pb_ss := min(h_pb_ss)]
+  }else{
+    model_skillscores[(Horizon==h)&(type=="lower"), MAE_ss := quantile(h_mae_ss, bounds[1])]
+    model_skillscores[(Horizon==h)&(type=="lower"), RMSE_ss := quantile(h_rmse_ss, bounds[1])]
+    model_skillscores[(Horizon==h)&(type=="lower"), pb_ss := quantile(h_pb_ss, bounds[1])]
+  }
+  
+  if (bounds[2] == 1){
+    model_skillscores[(Horizon==h)&(type=="upper"), MAE_ss := min(h_mae_ss)]
+    model_skillscores[(Horizon==h)&(type=="upper"), RMSE_ss := min(h_rmse_ss)]
+    model_skillscores[(Horizon==h)&(type=="upper"), pb_ss := min(h_pb_ss)]
+  }else{
+    model_skillscores[(Horizon==h)&(type=="upper"), MAE_ss := quantile(h_mae_ss, bounds[2])]
+    model_skillscores[(Horizon==h)&(type=="upper"), RMSE_ss := quantile(h_rmse_ss, bounds[2])]
+    model_skillscores[(Horizon==h)&(type=="upper"), pb_ss := quantile(h_pb_ss, bounds[2])]
+  }
 }
 
 model_skillscores[, Model := paste0(model)]  

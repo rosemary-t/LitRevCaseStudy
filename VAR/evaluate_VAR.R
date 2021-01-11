@@ -8,9 +8,9 @@ setwd(dirname(getActiveDocumentContext()$path))
 ## choose between constant variance and exponential smoothing model for the variance, 
 ## for all sites and all horizons
 
-zone <- 1 # what zone do we want to evaluate forecasts for?
+zone <- 6 # what zone do we want to evaluate forecasts for?
 Nboots <- 1000 # number of times to bootstrap resample.
-quantile_bounds <- c(0,1) # quantiles of bootstraped metric to plot. If (0,1) will use min and max observed pinball scores.
+quantile_bounds <- c(0.025,0.975) # quantiles of bootstraped metric to plot. If (0,1) will use min and max observed pinball scores.
 
 
 load(paste0("./zone",zone,"_qs_constvar.rda")) # load quantile forecasts from fitting a normal distribution
@@ -80,16 +80,16 @@ ggplot(data=model_scores, aes(x=Horizon, y=avPinball, colour=Model)) +
 
 
 ## now we need to combine the quantile forecasts from the correct variance model for each horizon, to get a 'final' set:
-which_variance <- fread('../evaluate_models/const_vs_expsmooth.csv')
-const_horizons <- which_variance[(Zone==zone)&(VAR_opt=="const"), Horizon]
-exp_horizons <- which_variance[(Zone==zone)&(VAR_opt=="exp"), Horizon]
-
-const_quantile_indices <- const_var[[2]][(Horizon %in% const_horizons), which=TRUE]
-exp_quantile_indices <- expsm_var[[2]][(Horizon %in% exp_horizons), which=TRUE]
-
-new_quantiles <- rbind(const_var[[1]][const_quantile_indices], expsm_var[[1]][exp_quantile_indices])
-class(new_quantiles) <- c("MultiQR", class(new_quantiles))
-new_otherinfo <- rbind(const_var[[2]][const_quantile_indices], expsm_var[[2]][exp_quantile_indices])
-
-VAR_fcs <- list(new_quantiles, new_otherinfo)
-save(VAR_fcs, file=paste0('./final_quantiles_zone',zone,'.rda'))
+# which_variance <- fread('../evaluate_models/const_vs_expsmooth.csv')
+# const_horizons <- which_variance[(Zone==zone)&(VAR_opt=="const"), Horizon]
+# exp_horizons <- which_variance[(Zone==zone)&(VAR_opt=="exp"), Horizon]
+# 
+# const_quantile_indices <- const_var[[2]][(Horizon %in% const_horizons), which=TRUE]
+# exp_quantile_indices <- expsm_var[[2]][(Horizon %in% exp_horizons), which=TRUE]
+# 
+# new_quantiles <- rbind(const_var[[1]][const_quantile_indices], expsm_var[[1]][exp_quantile_indices])
+# class(new_quantiles) <- c("MultiQR", class(new_quantiles))
+# new_otherinfo <- rbind(const_var[[2]][const_quantile_indices], expsm_var[[2]][exp_quantile_indices])
+# 
+# VAR_fcs <- list(new_quantiles, new_otherinfo)
+# save(VAR_fcs, file=paste0('./final_quantiles_zone',zone,'.rda'))
