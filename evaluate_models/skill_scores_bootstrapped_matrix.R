@@ -50,7 +50,7 @@ for (i in zones){
   MC_quantiles_list[[i]] <- MC_fcs[[1]]
   MC_details_list[[i]] <- MC_fcs[[2]]
   
-  load(file=paste0("../EMD_v2/final_quantiles_zone",i,".rda"))
+  load(file=paste0("../EMD/final_quantiles_zone",i,".rda"))
   EMD_fcs[[2]][, id := c(1:dim(EMD_fcs[[2]])[1])] # add an row index count
   EMD_quantiles_list[[i]] <- EMD_fcs[[1]]
   EMD_details_list[[i]] <- EMD_fcs[[2]]

@@ -19,7 +19,7 @@ load(file=paste0("../VAR/final_quantiles_zone",zone,".rda"))
 # load(file=paste0("../VAR/zone",zone,"_qs_expsmoothvar.rda"))
 
 load(file=paste0("../MC/test_forecasts_zone",zone,".rda"))
-load(file=paste0("../EMD_v2/final_quantiles_zone",zone,".rda"))
+load(file=paste0("../EMD/final_quantiles_zone",zone,".rda"))
 
 times1 <- merge(persistence_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], VAR_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], by=c('issue_time', 'target_time'))
 times2 <- merge(MC_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], EMD_fcs[[2]][Horizon==horizon, .(issue_time, target_time)])
