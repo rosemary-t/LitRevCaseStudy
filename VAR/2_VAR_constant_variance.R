@@ -33,8 +33,7 @@ for (z in zones){
   # plot(zone_train_data[Horizon==6, target_time], zone_train_data[Horizon==6, errors], type='l')
   # require(forecast)
   # acf(zone_train_data[Horizon==6, errors])
-  # fit1<- arima(zone_data[Horizon==1, errors], order=c(2,0,0), seasonal=list(order=c(2,0,0), period=12))
-  # Pacf(fit1$residuals)
+
   
   zone_sd <- sd(zone_train_data$errors) # standard deviation of the residuals
   

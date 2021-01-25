@@ -35,9 +35,8 @@ for (h in horizons){
   persistence_times <- persistence_fcs[[2]][Horizon==h,issue_time]# issue_times that there is a persistence forecast for
   VAR_times <- VAR_fcs[[2]][Horizon==h, issue_time]
   MC_times <- MC_fcs[[2]][Horizon==h, issue_time]
-  
-  ## now can get the issue_times that have forecasts for all models:
-  common_times <- as.POSIXct(Reduce(intersect, list(persistence_times, VAR_times)), tz="UTC", origin="1970-01-01 00:00.00 UTC")
+  ## now can get the issue_times that have both persistence and VAR forecasts:
+  common_times <- as.POSIXct(Reduce(intersect, list(persistence_times, VAR_times, MC_times)), tz="UTC", origin="1970-01-01 00:00.00 UTC")
   persistence_indices <- persistence_fcs[[2]][(Horizon==h) & (issue_time %in% common_times), which=TRUE]
   VAR_indices <- VAR_fcs[[2]][(Horizon==h) & (issue_time %in% common_times), which=TRUE]
   MC_indices <- MC_fcs[[2]][(Horizon==h) & (issue_time %in% common_times), which=TRUE]
@@ -60,12 +59,11 @@ for (h in horizons){
   model_ss[(Model=="MC")&(Horizon==h), RMSE_ss := (1-mc_RMSE/p_RMSE)]
   
   
+  
   ## and also pinball skill score.
   p_pinball <- pinball(persistence_fcs[[1]][persistence_indices], realisations = persistence_fcs[[2]][persistence_indices, ActualPower])
   v_pinball <- pinball(VAR_fcs[[1]][VAR_indices], realisations = VAR_fcs[[2]][VAR_indices, ActualPower])
   mc_pinball <- pinball(MC_fcs[[1]][MC_indices], realisations = MC_fcs[[2]][MC_indices, ActualPower])
-  
-  
   # pinball_ss <- 1-v_pinball$Loss/p_pinball$Loss # if you want pinball skill score per quantile.
   # plot(v_pinball$Quantile, pinball_ss)
   
@@ -87,14 +85,6 @@ for (h in horizons){
   
 }
 
-pdf(file=paste0("./pinball_ss_zone", zone, ".pdf"), width=10, height=7, family="Times")
+
 ggplot(data=model_ss, aes(x=Horizon, y=Pinball_ss, colour=Model)) +
-  geom_line() +
-  geom_hline(yintercept=0) +
-  ylab('Pinball skill score')
-dev.off()
-
-#ggsave(filename="pinball_ss_zone.pdf", plot=pbplot)
-
-
-
+  geom_line()
