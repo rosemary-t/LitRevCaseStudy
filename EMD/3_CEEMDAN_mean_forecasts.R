@@ -1,22 +1,127 @@
 require(Rlibeemd)
 require(data.table)
-require(forecast)
 require(doParallel)
 require(rstudioapi)
+require(ProbCast)
 
 setwd(dirname(getActiveDocumentContext()$path))
 
-z <- 2 # which area we are forecasting for
+## train models on portion of training set, and produce mean forecasts for rest of training set as well as all of test set
+
+############# function to make input/output sets from sliding window time series of all IMFs ##############
+
+make_xydfs <- function(iwt, zdata, wl, nimfs, nlags, hors){
+  ## create data.table with all lags, and lags of the differenced series too to fit AR(d=1)
+  ## including lags 12 and 24.
+  
+  window_XYs <- data.table() #  data.table to put X,Y inputs/outputs in
+  hors_cols <- paste0('y_',hors)
+  
+  window_start <- iwt - (wl-1)*60*60
+  windowdata <- zdata[(timestamp >= window_start) & (timestamp<= iwt),]
+  
+  ## make imfs from window time series
+  imfts <- as.data.table(ceemdan(windowdata$T_targetvar,num_imfs=nimfs)) 
+  setnames(imfts, 'Residual', paste('Residual', nimfs))
+  
+  
+  ## now set up matrix of inputs (lags) and outputs, to train AR with, for each IMF separately.
+  Ps <- c(c(1:nlags),12,24)
+  lagcols <- paste0('lag',Ps)
+  for (imfname in names(imfts)){
+    dtx <- copy(imfts[, .(y=get(imfname), series=imfname, target_time=windowdata$timestamp)]) # initialise data.table
+    dtx[, (hors_cols) := shift(y, (max(hors)-hors), type='lag', fill=NA)]
+    dtx[, (lagcols) := shift(y, (max(hors)-1+Ps), type='lag', fill=NA)]
+    dtx <- na.omit(dtx)
+    window_XYs <- rbind(window_XYs, dtx)
+  }
+  return (window_XYs)
+}
+
+############# function to make input lags for a given issue time, for forecasts ##############
+
+make_Xs <- function(iwt, zdata, wl, nimfs, nlags){
+  require(data.table)
+  require(Rlibeemd)
+  
+  window_x <- data.table() #  data.table to put X,Y inputs/outputs in
+
+  window_start <- iwt - (wl-1)*60*60
+  windowdata <- zdata[(timestamp >= window_start) & (timestamp<= iwt),]
+  
+  ## make imfs from window time series
+  imfts <- as.data.table(ceemdan(windowdata$T_targetvar,num_imfs=nimfs)) 
+  setnames(imfts, 'Residual', paste('Residual', nimfs))
+  
+  ## now set up matrix of inputs (lags) and outputs, to train AR with, for each IMF separately.
+  Ps <- c(24,12, c(nlags:1))
+  lagcols <- paste0('lag',Ps)
+  for (imfname in names(imfts)){
+    dtx <- data.table(issue_time=iwt, series=imfname)
+    dtx[, (lagcols) := as.list(imfts[(windowlen-Ps+1), get(imfname)])]
+    window_x <- rbind(window_x, dtx)
+  }
+  return(window_x)
+}
+
+####################### function to return forecasts for each horizon ########################
+
+horizon_fcs <- function(all_xydt, all_x, hor, bestmodel){
+  ## fit model on rows in all_xydt
+  ## forecast for each row in all_x
+  
+  imfnames <- bestmodel$series
+  all_imf_fcs <- data.table(issue_time=unique(all_x$issue_time))
+  
+  # fit and forecast each IMF
+  for (imfname in imfnames){
+    imf_model <- bestmodel[series==imfname, model]
+    imf_p <- bestmodel[series==imfname, P]
+    
+    XY <- all_xydt[series==imfname]
+    X <- all_x[series==imfname]
+    
+    if(imf_model=="AR"){
+      lagcols <- paste0('lag', c(1:imf_p))
+    }else if(imf_model=="AR_24"){
+      lagcols <- paste0('lag', c(c(1:imf_p), 12,24))
+    }else{print("different model is optimum")}
+    
+    form <- as.formula(paste0("y_",hor," ~ ", paste0(lagcols, collapse = "+")))
+    fit <- lm(form, XY)
+    forecasts <- data.table(issue_time=X$issue_time, fc=predict(fit, X))
+    setnames(forecasts, "fc", paste0(imfname))
+    
+    all_imf_fcs <- merge(all_imf_fcs, forecasts, by="issue_time")
+  }
+  
+  all_imf_fcs[, mean_fc := rowSums(.SD), .SDcols = imfnames]
+  all_imf_fcs[, target_time := issue_time+hor*60*60]
+  
+  return (all_imf_fcs[, .(issue_time, target_time, mean_fc)])
+}
+
+##############################################################################################
+
+z <- 10 # which area we are forecasting for
 horizons <- c(1:6) # number of steps ahead we are forecasting for
 split_date <- as.POSIXct("2012-12-31 12:00") # split the training/testing data here
-eps <- 0.01 # cutoff point at boundaries
+eps <- 0.01 # cutoff point at boundaries for lognormal transformation
+windowlen <- 500 # window length to use for EMD
 
+## list of the model (and lags) to fit for each IMF
+load(paste0("./model_errors_zone",z,".rda"))
+
+## and get the number of IMFs to use.
 opt_params <- fread(file="./opt_parameters.csv")
 opt_nimfs <- opt_params[Zone==z, Opt_nimf]
-opt_windowlen <- opt_params[Zone==z, Opt_wl]
+imfnames <- c(paste("IMF", c(1:(opt_nimfs-1))),paste("Residual", opt_nimfs))
+best_model <- model_error_dt[series %in% imfnames , .SD[which.min(MAE)], by = c("series")]
+Nlags <- max(best_model$P)
+
 
 # now load the data and prepare it
-load(paste0("../Data/data_zone", z, ".rda"))
+load(paste0('../Data/data_zone', z,'.rda'))
 assign('zdata', get(paste0('data_zone', z)))
 rm(list=paste0("data_zone",z))
 
@@ -27,89 +132,51 @@ zdata <- zdata[!is.na(zdata$TARGETVAR), ] ## if the last row in the column is NA
 zdata[, T_targetvar := lapply(.SD, function(x){ifelse(x <= eps,  eps, ifelse(x >= (1-eps), (1-eps), x))}), .SDcols=c("TARGETVAR")] # clip to [eps, (1-eps)] range
 zdata[, T_targetvar := log(T_targetvar/(1-T_targetvar))]
 
-## also load the table specifying what model for each IMF:
-opt_model <- fread(file=paste0("./whichmodels_errorinfo_zone",z,".csv"))
-imfnames <- c(paste("IMF", c(1:(opt_nimfs-1))), paste("Residual", opt_nimfs))
+## split into validation and testing data
+z_train <- copy(zdata[timestamp<= split_date,])
 
-## need to produce mean forecasts now using opt_nimfs and opt_windowlen, for ALL possible time points 
-## then the ones in the training set can be used to find the variance of the residuals
-## and the test set is used to evaluate the final probabilistic forecasts out of sample.
-start_ts <- zdata[opt_windowlen, timestamp] # first possible issue time 
-end_ts <- zdata[(dim(zdata)[1] - max(horizons)), timestamp]
-allposs_window_times <- zdata[(timestamp >= start_ts) & (timestamp <= end_ts), timestamp] # all forecast issue times
+## use 1/4 of training data for finding best model per imf, 1/4 for finding opt number of imfs, last 1/2 for fittingmodels and generating mean forecasts to fit variance of residuals to.
+train_chunk_length <- as.integer(dim(z_train)[1]/4)
+train_chunk_three <- z_train[(2*train_chunk_length):(4*train_chunk_length)]
 
+## need to produce mean forecasts now using opt_nimfs and best_model
+## mean forecasts for times in the training set are used to find the variance of the residuals
+## and the test set is used to evaluate the forecasts out of sample.
 
-## first put everything in a function that makes the forecasts for all horizons 1:H, for a single window time. 
-produce_forecasts <- function(ts_datatable, WT, WL, nimfs, H, opt_model){
-  require(Rlibeemd)
-  require(data.table)
-  require(forecast)
-  
-  ## set up data.table to put forecasts into
-  horizon_forecasts <- data.table(issue_time=WT, Horizon=c(1:H), target_time=WT+c(1:H)*60*60)
-  imfnames <- c(paste("IMF", c(1:(nimfs-1))), paste("Residual", nimfs))
-  
-  window_start <- WT - (WL-1)*60*60
-  windowdata <- ts_datatable[(timestamp >= window_start) & (timestamp <= WT), T_targetvar]
- 
-  imfs <- ceemdan(windowdata,num_imfs=nimfs) # create the imfs for this rolling window.
-  colnames(imfs) <- imfnames
-  imflist <- matrix(nrow=nimfs, ncol=H) # empty list to put each IMF forecast in, for each horizon.
-  
-  for (i in c(1:opt_nimfs)){
-    imfname <- imfnames[i]
-    opt_arma <- opt_model[imf_name == imfname, `best_model (value for d)`]
-    
-    if (opt_arma == 0){
-      # fit arma with d==0 (in reality seems to be faster to not specify d)
-      fit <- auto.arima(imfs[,imfname], max.p=6, max.q=4, max.order=8, stepwise = FALSE)
-    }else if(opt_arma==1){
-      # fit arma with d=1.
-      fit <- auto.arima(imfs[,imfname], d=1, max.p=6, max.q=4, max.order=8, stepwise = FALSE)
-    }else{cat("wt=",wt,"," ,imfname,  'not selected a model to fit!')}
-    
-    imflist[i,] <-  as.numeric(forecast(fit, h=H)[["mean"]]) # save the forecast
-  }
-  
-  horizon_forecasts[, mean_fcs := colMeans(imflist)]
-  return (horizon_forecasts)
+## first, make XY 
+start_ts <- train_chunk_three[windowlen, timestamp]
+end_ts <- train_chunk_three[(dim(train_chunk_three)[1] - max(horizons)), timestamp]
+issue_times <- seq(from=start_ts, to=end_ts, by=windowlen*60*60)
+
+all_imf_xys <- data.table()
+for (it in issue_times){
+  it_dt <- make_xydfs(it, train_chunk_three, windowlen, opt_nimfs, Nlags, horizons)
+  all_imf_xys <- rbind(all_imf_xys, it_dt)
 }
 
-# test <- produce_forecasts(zdata, allposs_window_times[1], opt_windowlen, opt_nimfs, max(horizons), opt_model)
 
-## first do for 500 windows in the training set, to get standard deviation of residuals from
-## find the window times used already....
-load(paste0("./zone_", z, "_issuetimesdt.rda"))
-poss_train_times <- allposs_window_times[(!allposs_window_times %in% issue_timesdt$timestamps) & (allposs_window_times <= split_date)] 
-training_times <- sample(poss_train_times, size=500, replace=FALSE)
+end_test_ts <- zdata[(dim(zdata)[1] - max(horizons)), timestamp]
+forecast_window_times <- zdata[(timestamp >= start_ts) & (timestamp <= end_test_ts), timestamp] # the timestamps for the end of all possible sliding windows in the training data.
+# test <- make_Xs(forecast_window_times[10], zdata, windowlen, opt_nimfs, Nlags)
 
 cores <- detectCores()
 cl <- makeCluster(cores-2)
 registerDoParallel(cl)
 start_time <- Sys.time()
-train_horizon_forecasts <- foreach(wt =  training_times) %dopar% {
-  produce_forecasts(zdata, wt, opt_windowlen, opt_nimfs, max(horizons), opt_model)
+X_fc_rows <- foreach(wt =  forecast_window_times) %dopar% {
+  make_Xs(wt, zdata, windowlen, opt_nimfs, Nlags)
 }
 print (Sys.time() - start_time)
 stopCluster(cl)
 
-Train_forecasts <- rbindlist(train_horizon_forecasts)
-save(Train_forecasts, file=paste0("./train_mean_forecasts_zone",z,".rda"))
+all_X_rows <- rbindlist(X_fc_rows)
 
-## now get mean forecasts for all windows in the test set
-test_times <- allposs_window_times[allposs_window_times > split_date]
-second_test_times <- test_times[!test_times %in% unique(Test_forecasts$issue_time)]
-
-cl <- makeCluster(cores-2)
-registerDoParallel(cl)
-start_time <- Sys.time()
-test_horizon_forecasts <- foreach(wt =  second_test_times) %dopar% {
-  produce_forecasts(zdata, wt, opt_windowlen, opt_nimfs, max(horizons), opt_model)
+all_mean_fcs <- data.table()
+for (h in horizons){
+  hfcs <- horizon_fcs(all_imf_xys, all_X_rows, h, best_model)
+  all_mean_fcs <- rbind(all_mean_fcs, hfcs)
 }
-print (Sys.time() - start_time)
-stopCluster(cl)
 
-Test1_forecasts <- rbindlist(test_horizon_forecasts)
-save(Test_forecasts, file=paste0("./test_mean_forecasts_zone",z,".rda"))
-load(paste0("./test_mean_forecasts_zone",z,".rda"))
-#Test_forecasts <- rbind(Test_forecasts, Test1_forecasts)
+all_mean_fcs[, Horizon := (target_time - issue_time)]
+
+save(all_mean_fcs, file=paste0("./mean_forecasts_zone", z,".rda"))

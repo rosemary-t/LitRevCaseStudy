@@ -52,7 +52,7 @@ if (model=="VAR"){
   rm(VAR_fcs)
 }else if(model=="EMD"){
   for (i in zones){
-    load(file=paste0("../EMD_v2/final_quantiles_zone",i,".rda"))
+    load(file=paste0("../EMD/final_quantiles_zone",i,".rda"))
     EMD_fcs[[2]][, id := c(1:dim(EMD_fcs[[2]])[1])] # add an row index count
     model_quantiles_list[[i]] <- EMD_fcs[[1]]
     model_details_list[[i]] <- EMD_fcs[[2]]
