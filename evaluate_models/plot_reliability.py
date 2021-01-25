@@ -27,7 +27,7 @@ plt.axhline(0, c='k')
 plt.xlim(0,1)
 plt.ylim(-0.15, 0.15)
 plt.xlabel('Nominal')
-plt.ylabel('relative Empirical')
+plt.ylabel('Relative Empirical')
 
 for i in range(len(models)):
     m = models[i]
