@@ -94,7 +94,7 @@ anfis_cv <- function(XYdt, imfname, cv){
 
 ############################################################################################
 
-for (zone in c(7:10)){
+for (zone in c(1:10)){
   print (zone)
   split_date <- as.POSIXct("2012-12-31 12:00", tz="UTC") # split the training/testing data here
   horizon <- 1 # number of steps ahead we are forecasting for

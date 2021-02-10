@@ -16,7 +16,7 @@ load("../VAR/all_sites_power.rda") # this is power in transformed space already
 setnames(alldata, 'timestamp', 'target_time') # so this matches with training_mean_fcs colnames.
 
 
-for (z in c(2:10)){
+for (z in c(1:10)){
   print (z)
   
   ## load the site mean forecasts

@@ -67,9 +67,15 @@ for (z in zones){
   stopCluster(cl)
   
   variance_fcs <- rbindlist(variance_fcs)
+  # load the original ActualPower (unaffected by clipping, transforming)
+  load(paste0('../Data/data_zone', z,'.rda'))
+  assign("zdata", get(paste0("data_zone", z)))
+  rm(list=paste0("data_zone", z))
+  zdata <- zdata[,.(TARGETVAR, timestamp)]
+  setnames(zdata, c('TARGETVAR', 'timestamp'), c('ActualPower', 'target_time'))
   meanvardt <- merge(zone_data, variance_fcs, by=c("issue_time", "target_time")) # means and variances in one data.table.
+  meanvardt <- merge(meanvardt, zdata, by='target_time')
   meanvardt[, varfc := abs(varfc)] # standard deviations must be positive
-  meanvardt[, ActualPower := 1/(1+exp(-power))]
   meanvardt <- na.omit(meanvardt) ## delete rows with NAs
   
   ## now we have a mean and a variance for every time point, make the quantile forecasts.

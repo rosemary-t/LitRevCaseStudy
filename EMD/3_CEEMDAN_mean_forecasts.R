@@ -103,80 +103,84 @@ horizon_fcs <- function(all_xydt, all_x, hor, bestmodel){
 
 ##############################################################################################
 
-z <- 10 # which area we are forecasting for
+zones <- c(4:10) # which area we are forecasting for
 horizons <- c(1:6) # number of steps ahead we are forecasting for
 split_date <- as.POSIXct("2012-12-31 12:00") # split the training/testing data here
 eps <- 0.01 # cutoff point at boundaries for lognormal transformation
 windowlen <- 500 # window length to use for EMD
 
-## list of the model (and lags) to fit for each IMF
-load(paste0("./model_errors_zone",z,".rda"))
-
-## and get the number of IMFs to use.
-opt_params <- fread(file="./opt_parameters.csv")
-opt_nimfs <- opt_params[Zone==z, Opt_nimf]
-imfnames <- c(paste("IMF", c(1:(opt_nimfs-1))),paste("Residual", opt_nimfs))
-best_model <- model_error_dt[series %in% imfnames , .SD[which.min(MAE)], by = c("series")]
-Nlags <- max(best_model$P)
-
-
-# now load the data and prepare it
-load(paste0('../Data/data_zone', z,'.rda'))
-assign('zdata', get(paste0('data_zone', z)))
-rm(list=paste0("data_zone",z))
-
-zdata[, TARGETVAR := approx(.I, TARGETVAR, .I)$y] ## interpolate missing values in  TARGETVAR
-zdata <- zdata[!is.na(zdata$TARGETVAR), ] ## if the last row in the column is NA, needs to be removed as can't be interpolated
-
-## lognormal transform: 
-zdata[, T_targetvar := lapply(.SD, function(x){ifelse(x <= eps,  eps, ifelse(x >= (1-eps), (1-eps), x))}), .SDcols=c("TARGETVAR")] # clip to [eps, (1-eps)] range
-zdata[, T_targetvar := log(T_targetvar/(1-T_targetvar))]
-
-## split into validation and testing data
-z_train <- copy(zdata[timestamp<= split_date,])
-
-## use 1/4 of training data for finding best model per imf, 1/4 for finding opt number of imfs, last 1/2 for fittingmodels and generating mean forecasts to fit variance of residuals to.
-train_chunk_length <- as.integer(dim(z_train)[1]/4)
-train_chunk_three <- z_train[(2*train_chunk_length):(4*train_chunk_length)]
-
-## need to produce mean forecasts now using opt_nimfs and best_model
-## mean forecasts for times in the training set are used to find the variance of the residuals
-## and the test set is used to evaluate the forecasts out of sample.
-
-## first, make XY 
-start_ts <- train_chunk_three[windowlen, timestamp]
-end_ts <- train_chunk_three[(dim(train_chunk_three)[1] - max(horizons)), timestamp]
-issue_times <- seq(from=start_ts, to=end_ts, by=windowlen*60*60)
-
-all_imf_xys <- data.table()
-for (it in issue_times){
-  it_dt <- make_xydfs(it, train_chunk_three, windowlen, opt_nimfs, Nlags, horizons)
-  all_imf_xys <- rbind(all_imf_xys, it_dt)
+for (z in zones){
+  print (z)
+  ## list of the model (and lags) to fit for each IMF
+  load(paste0("./model_errors_zone",z,".rda"))
+  
+  ## and get the number of IMFs to use.
+  opt_params <- fread(file="./opt_parameters.csv")
+  opt_nimfs <- opt_params[Zone==z, Opt_nimf]
+  imfnames <- c(paste("IMF", c(1:(opt_nimfs-1))),paste("Residual", opt_nimfs))
+  best_model <- model_error_dt[series %in% imfnames , .SD[which.min(MAE)], by = c("series")]
+  Nlags <- max(best_model$P)
+  
+  
+  # now load the data and prepare it
+  load(paste0('../Data/data_zone', z,'.rda'))
+  assign('zdata', get(paste0('data_zone', z)))
+  rm(list=paste0("data_zone",z))
+  
+  zdata[, TARGETVAR := approx(.I, TARGETVAR, .I)$y] ## interpolate missing values in  TARGETVAR
+  zdata <- zdata[!is.na(zdata$TARGETVAR), ] ## if the last row in the column is NA, needs to be removed as can't be interpolated
+  
+  ## lognormal transform: 
+  zdata[, T_targetvar := lapply(.SD, function(x){ifelse(x <= eps,  eps, ifelse(x >= (1-eps), (1-eps), x))}), .SDcols=c("TARGETVAR")] # clip to [eps, (1-eps)] range
+  zdata[, T_targetvar := log(T_targetvar/(1-T_targetvar))]
+  
+  ## split into validation and testing data
+  z_train <- copy(zdata[timestamp<= split_date,])
+  
+  ## use 1/4 of training data for finding best model per imf, 1/4 for finding opt number of imfs, last 1/2 for fittingmodels and generating mean forecasts to fit variance of residuals to.
+  train_chunk_length <- as.integer(dim(z_train)[1]/4)
+  train_chunk_three <- z_train[(2*train_chunk_length):(4*train_chunk_length)]
+  
+  ## need to produce mean forecasts now using opt_nimfs and best_model
+  ## mean forecasts for times in the training set are used to find the variance of the residuals
+  ## and the test set is used to evaluate the forecasts out of sample.
+  
+  ## first, make XY 
+  start_ts <- train_chunk_three[windowlen, timestamp]
+  end_ts <- train_chunk_three[(dim(train_chunk_three)[1] - max(horizons)), timestamp]
+  issue_times <- seq(from=start_ts, to=end_ts, by=windowlen*60*60)
+  
+  all_imf_xys <- data.table()
+  for (it in issue_times){
+    it_dt <- make_xydfs(it, train_chunk_three, windowlen, opt_nimfs, Nlags, horizons)
+    all_imf_xys <- rbind(all_imf_xys, it_dt)
+  }
+  
+  
+  end_test_ts <- zdata[(dim(zdata)[1] - max(horizons)), timestamp]
+  forecast_window_times <- zdata[(timestamp >= start_ts) & (timestamp <= end_test_ts), timestamp] # the timestamps for the end of all possible sliding windows in the training data.
+  # test <- make_Xs(forecast_window_times[10], zdata, windowlen, opt_nimfs, Nlags)
+  
+  cores <- detectCores()
+  cl <- makeCluster(cores-2)
+  registerDoParallel(cl)
+  start_time <- Sys.time()
+  X_fc_rows <- foreach(wt =  forecast_window_times) %dopar% {
+    make_Xs(wt, zdata, windowlen, opt_nimfs, Nlags)
+  }
+  print (Sys.time() - start_time)
+  stopCluster(cl)
+  
+  all_X_rows <- rbindlist(X_fc_rows)
+  
+  all_mean_fcs <- data.table()
+  for (h in horizons){
+    hfcs <- horizon_fcs(all_imf_xys, all_X_rows, h, best_model)
+    all_mean_fcs <- rbind(all_mean_fcs, hfcs)
+  }
+  
+  all_mean_fcs[, Horizon := (target_time - issue_time)]
+  
+  save(all_mean_fcs, file=paste0("./mean_forecasts_zone", z,".rda"))
+  
 }
-
-
-end_test_ts <- zdata[(dim(zdata)[1] - max(horizons)), timestamp]
-forecast_window_times <- zdata[(timestamp >= start_ts) & (timestamp <= end_test_ts), timestamp] # the timestamps for the end of all possible sliding windows in the training data.
-# test <- make_Xs(forecast_window_times[10], zdata, windowlen, opt_nimfs, Nlags)
-
-cores <- detectCores()
-cl <- makeCluster(cores-2)
-registerDoParallel(cl)
-start_time <- Sys.time()
-X_fc_rows <- foreach(wt =  forecast_window_times) %dopar% {
-  make_Xs(wt, zdata, windowlen, opt_nimfs, Nlags)
-}
-print (Sys.time() - start_time)
-stopCluster(cl)
-
-all_X_rows <- rbindlist(X_fc_rows)
-
-all_mean_fcs <- data.table()
-for (h in horizons){
-  hfcs <- horizon_fcs(all_imf_xys, all_X_rows, h, best_model)
-  all_mean_fcs <- rbind(all_mean_fcs, hfcs)
-}
-
-all_mean_fcs[, Horizon := (target_time - issue_time)]
-
-save(all_mean_fcs, file=paste0("./mean_forecasts_zone", z,".rda"))
