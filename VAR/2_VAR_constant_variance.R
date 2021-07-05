@@ -39,8 +39,14 @@ for (z in zones){
   
   ## mean forecasts in 'power' (untransformed) space, needed to generate quantile forecasts
   zone_test_data <- testing_mean_fcs[, .(issue_time, target_time, Horizon, mean_T_fcs=get(paste0("zone",z,"power_meanfcs")))]
-  zone_test_data <- merge(zone_test_data, alldata[,.(target_time, Tpower=get(paste0("zone",z,"power")))], by='target_time')
-  zone_test_data[, ActualPower := 1/(1+exp(-Tpower))]
+  
+  # load the original ActualPower (unaffected by clipping, transforming)
+  load(paste0('../Data/data_zone', z,'.rda'))
+  assign("zdata", get(paste0("data_zone", z)))
+  rm(list=paste0("data_zone", z))
+  zdata <- zdata[,.(TARGETVAR, timestamp)]
+  setnames(zdata, c('TARGETVAR', 'timestamp'), c('ActualPower', 'target_time'))
+  zone_test_data <- merge(zone_test_data, zdata, by='target_time')
   
   ## now make quantile forecasts (in transformed space first) for this zone
   z_quantiles <- data.table()
@@ -52,8 +58,9 @@ for (z in zones){
   z_quantiles <- SortQuantiles(z_quantiles, Limits=list(U=UL, L=LL)) # make sure quantiles don't cross and crop at eps (in transformed space)
   z_quantiles <- 1/(1+exp(-z_quantiles)) ## now transform back to 'power' space. However, this operation returns a data.frame object so:
   class(z_quantiles) <- c("MultiQR", "data.table", class(z_quantiles)) # make a multiQR object again (SortQuantiles just returns a data.table).
-  other_info <- zone_test_data[, .(issue_time, target_time, Horizon, ActualPower)] # all the other information needed to evaluate the quantiles.
   
+  other_info <- zone_test_data[, .(issue_time, target_time, Horizon, ActualPower)] # all the other information needed to evaluate the quantiles.
+
   ## make a list with the MultiQR object and the time info data.table
   VAR_fcs <-list(z_quantiles,other_info) 
   save(VAR_fcs, file=paste0("./zone",z,"_qs_constvar.rda"))

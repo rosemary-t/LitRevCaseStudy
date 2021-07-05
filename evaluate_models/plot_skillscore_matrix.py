@@ -12,7 +12,7 @@ plt.rc('text', usetex=True) #LaTeX fonts on plots for compatibility with thesis 
 plt.rc('font', family='serif', size=16)
 fileloc = r'C:\Users\rosemaryt\Documents\GitHub\LitRevCaseStudy\evaluate_models'
 
-matrixdata = pd.read_csv(f'{fileloc}\\skillscore_matrix_h2PB.csv')
+matrixdata = pd.read_csv(f'{fileloc}\\skillscore_matrix_h2RMSE.csv')
 matrixdata.set_index('Unnamed: 0', inplace=True)
 axlabs = matrixdata.columns.values
 plotdata = np.array(matrixdata)

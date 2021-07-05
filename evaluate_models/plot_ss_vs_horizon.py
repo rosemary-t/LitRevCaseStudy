@@ -14,7 +14,7 @@ plt.rc('font', family='serif', size=16)
 
 models = ["VAR", "MC", "EMD"]
 colours = ['#e41a1c', '#377eb8', '#4daf4a', '#984ea3', '#ff7f00', '#ffff33', '#a65628', '#f781bf']
-ss_type = "MAE"
+ss_type = "RMSE"
 if ss_type=="pb":
     long_ss = "Pinball"
 else: 

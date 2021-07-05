@@ -19,7 +19,7 @@ Qnames <- paste0("q",Quantiles*100)
 
 
 ## load the data
-zone <- 10
+zone <- 1
 load(paste0("../Data/data_zone", zone, ".rda"))
 assign("zdata", get(paste0("data_zone", zone)))
 rm(list=paste0("data_zone", zone))

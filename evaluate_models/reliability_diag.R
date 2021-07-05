@@ -4,8 +4,8 @@ require(rstudioapi)
 
 setwd(dirname(getActiveDocumentContext()$path))
 
-zone <- 4
-horizon <- 2
+zone <- 1
+horizons <- c(1:6)
 models <- c("Persistence", "VAR", "MC", "EMD")
 Nboots <- 500 # number of times to bootstrap resample
 
@@ -21,14 +21,10 @@ load(file=paste0("../VAR/final_quantiles_zone",zone,".rda"))
 load(file=paste0("../MC/test_forecasts_zone",zone,".rda"))
 load(file=paste0("../EMD/final_quantiles_zone",zone,".rda"))
 
-times1 <- merge(persistence_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], VAR_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], by=c('issue_time', 'target_time'))
-times2 <- merge(MC_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], EMD_fcs[[2]][Horizon==horizon, .(issue_time, target_time)])
-mutual_times <- merge(times1, times2)
-
 get_reliability <- function(forecasts, horizon, timestamps, nb, model){
   ## timestamps are the target times we want to evaluate for
   rowinds <- forecasts[[2]][(Horizon==horizon) & (target_time %in% timestamps), which=TRUE]
-  rel <- reliability(qrdata=forecasts[[1]][rowinds,], realisations = forecasts[[2]][rowinds, ActualPower], bootstrap=nb, plot.it=T)
+  rel <- reliability(qrdata=forecasts[[1]][rowinds,], realisations = forecasts[[2]][rowinds, ActualPower], bootstrap=nb, plot.it=F)
   rel <- as.data.table(rel)
   rel[, flat_empirical := Empirical-Nominal]
   rel[, flat_upper := upper-Nominal]
@@ -38,10 +34,22 @@ get_reliability <- function(forecasts, horizon, timestamps, nb, model){
   return(rel)
 }
 
-p_rel <- get_reliability(persistence_fcs, horizon, mutual_times$target_time, Nboots, "Persistence")
-var_rel <- get_reliability(VAR_fcs, horizon, mutual_times$target_time, Nboots, "VAR")
-mc_rel <- get_reliability(MC_fcs, horizon, mutual_times$target_time, Nboots, "MC")
-emd_rel <- get_reliability(EMD_fcs, horizon, mutual_times$target_time, Nboots, "EMD")
-reliability_dt <- rbind(p_rel, var_rel, mc_rel, emd_rel)
-fwrite(reliability_dt, file=paste0("./zone",zone, "_h",horizon,"_reliability.csv"))
+for (horizon in horizons){
+  times1 <- merge(persistence_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], VAR_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], by=c('issue_time', 'target_time'))
+  times2 <- merge(MC_fcs[[2]][Horizon==horizon, .(issue_time, target_time)], EMD_fcs[[2]][Horizon==horizon, .(issue_time, target_time)])
+  mutual_times <- merge(times1, times2)
+  
+  p_rel <- get_reliability(persistence_fcs, horizon, mutual_times$target_time, Nboots, "Persistence")
+  var_rel <- get_reliability(VAR_fcs, horizon, mutual_times$target_time, Nboots, "VAR")
+  mc_rel <- get_reliability(MC_fcs, horizon, mutual_times$target_time, Nboots, "MC")
+  emd_rel <- get_reliability(EMD_fcs, horizon, mutual_times$target_time, Nboots, "EMD")
+  reliability_dt <- rbind(p_rel, var_rel, mc_rel, emd_rel)
+  fwrite(reliability_dt, file=paste0("./zone",zone, "_h",horizon,"_reliability.csv"))
+  
+}
+
+
+
+
+
 
