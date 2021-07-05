@@ -8,7 +8,7 @@ setwd(dirname(getActiveDocumentContext()$path))
 ## choose between constant variance and exponential smoothing model for the variance, 
 ## for all sites and all horizons
 
-zone <- 6 # what zone do we want to evaluate forecasts for?
+zone <- 10 # what zone do we want to evaluate forecasts for?
 Nboots <- 1000 # number of times to bootstrap resample.
 quantile_bounds <- c(0.025,0.975) # quantiles of bootstraped metric to plot. If (0,1) will use min and max observed pinball scores.
 
@@ -76,7 +76,8 @@ for (h in horizons){
 
 ggplot(data=model_scores, aes(x=Horizon, y=avPinball, colour=Model)) +
   geom_line() +
-  geom_errorbar(aes(ymin=lower, ymax=upper), width=.2)
+  geom_errorbar(aes(ymin=lower, ymax=upper), width=.2) +
+  ggtitle(paste0('zone ',zone))
 
 
 ## now we need to combine the quantile forecasts from the correct variance model for each horizon, to get a 'final' set:
